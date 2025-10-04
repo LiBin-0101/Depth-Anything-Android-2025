@@ -6,8 +6,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -26,7 +24,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.exifinterface.media.ExifInterface
 import com.ml.shubham0204.depthanything.ui.theme.DepthAnythingTheme
 import kotlinx.coroutines.CoroutineScope
@@ -35,22 +33,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.engawapg.lib.zoomable.rememberZoomState
 import net.engawapg.lib.zoomable.zoomable
-import java.io.File
-import java.io.IOException
 
 class MainActivity : ComponentActivity() {
 
     private var depthImageState = mutableStateOf<Bitmap?>(null)
+    private var originalImageState = mutableStateOf<Bitmap?>(null)
+    private var meshDataState = mutableStateOf<MeshGenerator.MeshData?>(null)
     private var inferenceTimeState = mutableLongStateOf(0)
     private var progressState = mutableStateOf(false)
+    private var show3DViewState = mutableStateOf(false)
     private lateinit var depthAnything: DepthAnything
-    private var currentPhotoPath: String = ""
-    private var selectedModelState = mutableStateOf("fused_model_uint8_256.onnx")
+    private lateinit var meshGenerator: MeshGenerator
+    private var selectedModelState = mutableStateOf("model.onnx")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         depthAnything = DepthAnything(this, selectedModelState.value)
+        meshGenerator = MeshGenerator()
 
         setContent { ActivityUI() }
     }
@@ -63,8 +63,12 @@ class MainActivity : ComponentActivity() {
                 color = MaterialTheme.colorScheme.background
             ) {
                 val depthImage by remember { depthImageState }
+                val originalImage by remember { originalImageState }
+                val show3DView by remember { show3DViewState }
                 ProgressDialog()
-                if (depthImage != null) {
+                if (show3DView && originalImage != null && meshDataState.value != null) {
+                    ThreeDViewUI(originalImage = originalImage!!, meshData = meshDataState.value!!)
+                } else if (depthImage != null) {
                     DepthImageUI(depthImage = depthImage!!)
                 } else {
                     ImageSelectionUI()
@@ -82,11 +86,18 @@ class MainActivity : ComponentActivity() {
                 if (it != null) {
                     progressState.value = true
                     val bitmap = getFixedBitmap(it)
+                    originalImageState.value = bitmap
                     CoroutineScope(Dispatchers.Default).launch {
                         val (depthMap, inferenceTime) = depthAnything.predict(bitmap)
                         depthImageState.value = colormapInferno(depthMap)
                         inferenceTimeState.longValue = inferenceTime
-                        withContext(Dispatchers.Main) { progressState.value = false }
+                        
+                        // 生成3D网格（使用深度感知映射）
+                        val meshData = meshGenerator.generateSimplifiedMesh(depthMap, bitmap, 8000, 0.3f)
+                        withContext(Dispatchers.Main) { 
+                            meshDataState.value = meshData
+                            progressState.value = false 
+                        }
                     }
                 }
             }
@@ -95,106 +106,184 @@ class MainActivity : ComponentActivity() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth()
+                .padding(24.dp)
+                .fillMaxSize()
         ) {
-            Text(
-                text = getString(R.string.model_name),
-                style = MaterialTheme.typography.displaySmall,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
-            )
-            Text(
-                text = getString(R.string.model_description),
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
-            )
-
-            // Hyperlink-style text
-            val annotatedString = buildAnnotatedString {
-                pushStringAnnotation(
-                    tag = "paper",
-                    annotation = getString(R.string.model_paper_url)
+            // 主标题卡片
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 32.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
                 )
-                withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.primary)) {
-                    append("View Paper")
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "🎯 ${getString(R.string.model_name)}",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = getString(R.string.model_description),
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    )
                 }
-                pop()
-                append("   ")
-                pushStringAnnotation(
-                    tag = "github",
-                    annotation = getString(R.string.model_github_url)
-                )
-                withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.primary)) {
-                    append("GitHub")
-                }
-                pop()
             }
-            ClickableText(
-                text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium,
-                onClick = { offset ->
-                    annotatedString
-                        .getStringAnnotations(tag = "paper", start = offset, end = offset)
-                        .firstOrNull()
-                        ?.let {
-                            Intent(Intent.ACTION_VIEW, Uri.parse(it.item)).apply {
-                                startActivity(this)
+
+            // 模型选择卡片
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    Text(
+                        text = "📱 选择模型",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    var expanded by remember { mutableStateOf(false) }
+                    val models = remember { listModelsInAssets() }
+
+                    Box {
+                        OutlinedButton(
+                            onClick = { expanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(selectedModelState.value)
+                        }
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            models.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model) },
+                                    onClick = {
+                                        selectedModelState.value = model
+                                        expanded = false
+                                        depthAnything = DepthAnything(this@MainActivity, model)
+                                    }
+                                )
                             }
                         }
-                    annotatedString
-                        .getStringAnnotations(tag = "github", start = offset, end = offset)
-                        .firstOrNull()
-                        ?.let {
-                            Intent(Intent.ACTION_VIEW, Uri.parse(it.item)).apply {
-                                startActivity(this)
-                            }
-                        }
+                    }
                 }
-            )
+            }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Model selection dropdown
-            var expanded by remember { mutableStateOf(false) }
-            val models = remember { listModelsInAssets() }
-
-            Box {
-                OutlinedButton(
-                    onClick = { expanded = true },
-                    modifier = Modifier.fillMaxWidth()
+            // 图片选择按钮
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(selectedModelState.value)
-                }
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    models.forEach { model ->
-                        DropdownMenuItem(
-                            text = { Text(model) },
-                            onClick = {
-                                selectedModelState.value = model
-                                expanded = false
-                                depthAnything = DepthAnything(this@MainActivity, model)
-                            }
+                    Text(
+                        text = "🖼️ 选择图片",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    Button(
+                        onClick = {
+                            pickMediaLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text(
+                            text = "📁 从相册选择图片",
+                            style = MaterialTheme.typography.titleMedium
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = { dispatchTakePictureIntent() }) { Text(text = "Take A Picture") }
-
-            Button(
-                onClick = {
-                    pickMediaLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            // 链接卡片
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "🔗 相关链接",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    
+                    // Hyperlink-style text
+                    val annotatedString = buildAnnotatedString {
+                        pushStringAnnotation(
+                            tag = "paper",
+                            annotation = getString(R.string.model_paper_url)
+                        )
+                        withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                            append("📄 查看论文")
+                        }
+                        pop()
+                        append("   ")
+                        pushStringAnnotation(
+                            tag = "github",
+                            annotation = getString(R.string.model_github_url)
+                        )
+                        withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                            append("💻 GitHub")
+                        }
+                        pop()
+                    }
+                    ClickableText(
+                        text = annotatedString,
+                        style = MaterialTheme.typography.bodyMedium,
+                        onClick = { offset ->
+                            annotatedString
+                                .getStringAnnotations(tag = "paper", start = offset, end = offset)
+                                .firstOrNull()
+                                ?.let {
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(it.item)).apply {
+                                        startActivity(this)
+                                    }
+                                }
+                            annotatedString
+                                .getStringAnnotations(tag = "github", start = offset, end = offset)
+                                .firstOrNull()
+                                ?.let {
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(it.item)).apply {
+                                        startActivity(this)
+                                    }
+                                }
+                        }
                     )
                 }
-            ) {
-                Text(text = "Select From Gallery")
             }
         }
     }
@@ -205,34 +294,228 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun DepthImageUI(depthImage: Bitmap) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row {
-                Text(
+        Column(modifier = Modifier.fillMaxSize()) {
+            // 顶部控制栏
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(2f),
-                    text = "Depth Image",
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Button(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    onClick = { depthImageState.value = null }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(text = "Close")
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "🎯 深度图像",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            text = "推理时间: ${inferenceTimeState.longValue} ms",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "模型: ${depthAnything.modelName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(
+                        onClick = { 
+                            depthImageState.value = null
+                            originalImageState.value = null
+                            meshDataState.value = null
+                            show3DViewState.value = false
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(text = "❌ 关闭")
+                    }
                 }
             }
-            Image(
-                modifier =
-                Modifier
-                    .aspectRatio(depthImage.width.toFloat() / depthImage.height.toFloat())
-                    .zoomable(rememberZoomState()),
-                bitmap = depthImage.asImageBitmap(),
-                contentDescription = "Depth Image"
-            )
-            Text(text = "Inference time: ${inferenceTimeState.longValue} ms")
-            Text(text = "Model used: ${depthAnything.modelName}")
+            
+            // 深度图像显示
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .weight(1f),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Image(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .aspectRatio(depthImage.width.toFloat() / depthImage.height.toFloat())
+                        .zoomable(rememberZoomState()),
+                    bitmap = depthImage.asImageBitmap(),
+                    contentDescription = "Depth Image"
+                )
+            }
+            
+            // 底部操作按钮
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "🔧 操作选项",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Button(
+                            onClick = { show3DViewState.value = true },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text(text = "🎮 3D视图")
+                        }
+                        
+                        Button(
+                            onClick = { 
+                                depthImageState.value = null
+                                originalImageState.value = null
+                                meshDataState.value = null
+                                show3DViewState.value = false
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            )
+                        ) {
+                            Text(text = "🔄 重新选择")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    @Composable
+    private fun ThreeDViewUI(originalImage: Bitmap, meshData: MeshGenerator.MeshData) {
+        var advanced3DView: Advanced3DView? by remember { mutableStateOf(null) }
+        
+        Column(modifier = Modifier.fillMaxSize()) {
+            // 顶部控制栏
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "🎮 3D立体视图",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            text = "单指拖拽旋转（±7度），双指缩放",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(
+                        onClick = { show3DViewState.value = false },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(text = "❌ 返回")
+                    }
+                }
+            }
+            
+            // 高级3D视图 - 全屏显示
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .weight(1f),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                AndroidView(
+                    factory = { context ->
+                        Advanced3DView(context).apply {
+                            setMeshData(meshData, originalImage)
+                            advanced3DView = this
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            
+            // 底部控制按钮
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "🎛️ 视图控制",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Button(
+                            onClick = { 
+                                advanced3DView?.resetView()
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text(text = "🔄 重置视图")
+                        }
+                        
+                        Button(
+                            onClick = { 
+                                // 自动适配视图
+                                advanced3DView?.resetView()
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            )
+                        ) {
+                            Text(text = "🎯 自动适配")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -242,14 +525,34 @@ class MainActivity : ComponentActivity() {
         val isShowingProgress by remember { progressState }
         if (isShowingProgress) {
             BasicAlertDialog(onDismissRequest = { /* ProgressDialog is not cancellable */}) {
-                Surface(color = androidx.compose.ui.graphics.Color.White) {
+                Card(
+                    modifier = Modifier.padding(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
+                ) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
+                        modifier = Modifier.padding(32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        CircularProgressIndicator()
-                        Text(text = "Processing image ...")
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(48.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "🔄 正在处理图片...",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "请稍候，正在生成深度图和3D网格",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }
@@ -280,52 +583,4 @@ class MainActivity : ComponentActivity() {
         return imageBitmap
     }
 
-    // Dispatch an Intent which opens the camera application for the user.
-    // The code is from -> https://developer.android.com/training/camera/photobasics#TaskPath
-    private fun dispatchTakePictureIntent() {
-        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-        if (takePictureIntent.resolveActivity(packageManager) != null) {
-            val photoFile: File? =
-                try {
-                    val imagesDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-                    File.createTempFile("image", ".jpg", imagesDir).apply {
-                        currentPhotoPath = absolutePath
-                    }
-                } catch (ex: IOException) {
-                    null
-                }
-            photoFile?.also {
-                val photoURI =
-                    FileProvider.getUriForFile(this, "com.ml.shubham0204.depthanything", it)
-                takePictureLauncher.launch(photoURI)
-            }
-        }
-    }
-
-    private val takePictureLauncher =
-        registerForActivityResult(ActivityResultContracts.TakePicture()) {
-            if (it) {
-                var bitmap = BitmapFactory.decodeFile(currentPhotoPath)
-                val exifInterface = ExifInterface(currentPhotoPath)
-                bitmap =
-                    when (
-                        exifInterface.getAttributeInt(
-                            ExifInterface.TAG_ORIENTATION,
-                            ExifInterface.ORIENTATION_UNDEFINED
-                        )
-                    ) {
-                        ExifInterface.ORIENTATION_ROTATE_90 -> rotateBitmap(bitmap, 90f)
-                        ExifInterface.ORIENTATION_ROTATE_180 -> rotateBitmap(bitmap, 180f)
-                        ExifInterface.ORIENTATION_ROTATE_270 -> rotateBitmap(bitmap, 270f)
-                        else -> bitmap
-                    }
-                progressState.value = true
-                CoroutineScope(Dispatchers.Default).launch {
-                    val (depthMap, inferenceTime) = depthAnything.predict(bitmap)
-                    depthImageState.value = colormapInferno(depthMap)
-                    inferenceTimeState.longValue = inferenceTime
-                    withContext(Dispatchers.Main) { progressState.value = false }
-                }
-            }
-        }
 }

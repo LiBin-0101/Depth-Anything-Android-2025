@@ -16,32 +16,46 @@ import java.nio.ByteBuffer
 class DepthAnything(context: Context, val modelName: String) {
 
     private val ortEnvironment = OrtEnvironment.getEnvironment()
-    private val ortSession = ortEnvironment.createSession(context.assets.open(modelName).readBytes())
+    private val ortSession =
+        ortEnvironment.createSession(context.assets.open("model.onnx").readBytes())
     private val inputName = ortSession.inputNames.iterator().next()
 
-    private val inputDim: Int
-    private val outputDim: Int
+    private val inputDim = 256
+    private val outputDim = 252
 
-    init {
-        when {
-            modelName.contains("_256") -> {
-                inputDim = 256
-                outputDim = 252
-            }
-            modelName.contains("_512") -> {
-                inputDim = 512
-                outputDim = 504
-            }
-            else -> throw IllegalArgumentException("Unsupported model size")
-        }
+    private val rotateTransform = Matrix().apply { 
+        postRotate(90f)
+        postScale(-1f, 1f) // 水平翻转
     }
-
-    private val rotateTransform = Matrix().apply { postRotate(90f) }
 
     suspend fun predict(inputImage: Bitmap): Pair<Bitmap, Long> =
         withContext(Dispatchers.Default) {
+            // 保存原始图像尺寸和宽高比
+            val originalWidth = inputImage.width
+            val originalHeight = inputImage.height
+            val originalAspectRatio = originalWidth.toFloat() / originalHeight.toFloat()
+            
+            // 调试日志
+            android.util.Log.d("DepthAnything", "原始图像尺寸: ${originalWidth}x${originalHeight}, 宽高比: $originalAspectRatio")
+            
+            // 如果图像分辨率超过1024，先按比例缩放
+            val maxDimension = 1024
+            val scaledImage = if (inputImage.width > maxDimension || inputImage.height > maxDimension) {
+                val scale = maxDimension.toFloat() / maxOf(inputImage.width, inputImage.height)
+                val newWidth = (inputImage.width * scale).toInt()
+                val newHeight = (inputImage.height * scale).toInt()
+                Bitmap.createScaledBitmap(inputImage, newWidth, newHeight, true)
+            } else {
+                inputImage
+            }
+            
+            // 记录缩放后的尺寸
+            val scaledWidth = scaledImage.width
+            val scaledHeight = scaledImage.height
+            val scaledAspectRatio = scaledWidth.toFloat() / scaledHeight.toFloat()
+            
             val resizedImage = Bitmap.createScaledBitmap(
-                inputImage,
+                scaledImage,
                 inputDim,
                 inputDim,
                 true
@@ -61,7 +75,13 @@ class DepthAnything(context: Context, val modelName: String) {
             var depthMap = Bitmap.createBitmap(outputDim, outputDim, Bitmap.Config.ALPHA_8)
             depthMap.copyPixelsFromBuffer(outputTensor.byteBuffer)
             depthMap = Bitmap.createBitmap(depthMap, 0, 0, outputDim, outputDim, rotateTransform, false)
-            depthMap = Bitmap.createScaledBitmap(depthMap, inputImage.width, inputImage.height, true)
+            
+            // 将深度图缩放回原始图像尺寸，而不是scaledImage尺寸
+            depthMap = Bitmap.createScaledBitmap(depthMap, originalWidth, originalHeight, true)
+            
+            // 调试日志
+            android.util.Log.d("DepthAnything", "最终深度图尺寸: ${depthMap.width}x${depthMap.height}, 宽高比: ${depthMap.width.toFloat() / depthMap.height.toFloat()}")
+            
             return@withContext Pair(depthMap, inferenceTime)
         }
 
@@ -70,9 +90,10 @@ class DepthAnything(context: Context, val modelName: String) {
         imgData.rewind()
         for (i in 0 until bitmap.width) {
             for (j in 0 until bitmap.height) {
-                imgData.put(Color.red(bitmap[i, j]).toByte())
-                imgData.put(Color.blue(bitmap[i, j]).toByte())
-                imgData.put(Color.green(bitmap[i, j]).toByte())
+                val pixel = bitmap.getPixel(i, j)
+                imgData.put(Color.red(pixel).toByte())
+                imgData.put(Color.blue(pixel).toByte())
+                imgData.put(Color.green(pixel).toByte())
             }
         }
         imgData.rewind()

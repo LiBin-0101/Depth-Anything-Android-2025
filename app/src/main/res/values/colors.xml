@@ -1,5 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 现代蓝色主题 -->
+    <color name="primary_blue">#FF2196F3</color>
+    <color name="primary_blue_dark">#FF1976D2</color>
+    <color name="primary_blue_light">#FFBBDEFB</color>
+    
+    <!-- 辅助颜色 -->
+    <color name="accent_orange">#FFFF9800</color>
+    <color name="accent_orange_dark">#FFF57C00</color>
+    <color name="accent_orange_light">#FFFFE0B2</color>
+    
+    <!-- 深度估计主题色 -->
+    <color name="depth_primary">#FF3F51B5</color>
+    <color name="depth_primary_dark">#FF303F9F</color>
+    <color name="depth_primary_light">#FFC5CAE9</color>
+    
+    <!-- 基础颜色 -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
@@ -7,4 +23,9 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    
+    <!-- 表面颜色 -->
+    <color name="surface_light">#FFF8F9FA</color>
+    <color name="surface_dark">#FF121212</color>
+    <color name="card_background">#FFFFFFFF</color>
 </resources>

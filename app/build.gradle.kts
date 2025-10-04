@@ -59,7 +59,11 @@ dependencies {
     implementation(libs.material3)
     implementation(libs.onnx)
     implementation(libs.androidx.exifinterface)
-    implementation(libs.zoomable )
+    implementation(libs.zoomable)
+    
+    // OpenGL ES for 3D rendering - using built-in Android OpenGL ES
+    // No additional dependencies needed as OpenGL ES is part of Android SDK
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.espresso.core)

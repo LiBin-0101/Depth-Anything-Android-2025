@@ -790,8 +790,8 @@ fun colormapInferno(depthMap: Bitmap): Bitmap {
     val colorBitmap = Bitmap.createBitmap(depthMap.width, depthMap.height, Bitmap.Config.ARGB_8888)
     for (i in 0 ..< depthMap.width) {
         for (j in 0 ..< depthMap.height) {
-            val depth = Color.alpha(depthMap[i, j])
-            colorBitmap[i, j] = Color.argb(255, red[depth], green[depth], blue[depth])
+            val depth = Color.alpha(depthMap.getPixel(i, j))
+            colorBitmap.setPixel(i, j, Color.argb(255, red[depth], green[depth], blue[depth]))
         }
     }
     return colorBitmap
