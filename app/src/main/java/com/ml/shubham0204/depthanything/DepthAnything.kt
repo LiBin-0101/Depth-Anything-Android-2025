@@ -17,7 +17,7 @@ class DepthAnything(context: Context, val modelName: String) {
 
     private val ortEnvironment = OrtEnvironment.getEnvironment()
     private val ortSession =
-        ortEnvironment.createSession(context.assets.open("model.onnx").readBytes())
+        ortEnvironment.createSession(context.assets.open(modelName).readBytes())
     private val inputName = ortSession.inputNames.iterator().next()
 
     private val inputDim = 256
